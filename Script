@@ -1,16 +1,27 @@
 import csv
+import os
 import requests
-import os 
 
 # --- CONFIGURATION ---
 API_KEY = os.getenv("LEGISCAN_API_KEY")
 STATE = "nc"  # North Carolina
 OUTPUT_FILE = "lake_james_legislation.csv"
 
-# Keywords that indicate impact on Lake James, its counties, or its watershed
+# Keywords stored in lowercase for reliable matching
 KEYWORDS = [
-  "water quality", "discharge permit", "sedimentation", "siltation", "riparian buffer"
-"wetlands", "isolated wetlands", "interbasin transfer", "stormwater", "PFAS", "Lake James", "Data Centers"]
+    "water quality",
+    "discharge permit",
+    "sedimentation",
+    "siltation",
+    "riparian buffer",
+    "wetlands",
+    "isolated wetlands",
+    "interbasin transfer",
+    "stormwater",
+    "pfas",
+    "lake james",
+    "data centers",
+]
 
 
 def fetch_bill_list(api_key, state):
@@ -20,18 +31,14 @@ def fetch_bill_list(api_key, state):
     if response.status_code == 200:
         data = response.json()
         if data.get("status") == "OK":
-            # LegiScan masterlist returns index 0 as session info, rest are bills
             master_list = data.get("masterlist", {})
-            bills = [
-                val for key, val in master_list.items() if key != "session"
-            ]
-            return bills
+            return [val for key, val in master_list.items() if key != "session"]
     print("Error fetching master list from LegiScan.")
     return []
 
 
 def fetch_bill_details(api_key, bill_id):
-    """Fetches the detailed summary and history for a specific bill."""
+    """Fetches detailed summary and history for a specific bill."""
     url = f"https://api.legiscan.com/?key={api_key}&op=getBill&id={bill_id}"
     response = requests.get(url)
     if response.status_code == 200:
@@ -41,30 +48,18 @@ def fetch_bill_details(api_key, bill_id):
     return {}
 
 
-def scan_for_keywords(bill_data, keywords):
-    """Scans the title, description, and history for Lake James keywords."""
-    title = bill_data.get("title", "").lower()
-    description = bill_data.get("description", "").lower()
-
-    # Check if any keyword hits
-    for kw in keywords:
-        if kw in title or kw in description:
-            return True, kw  # Returns true and the keyword that triggered it
-
-    return False, None
-
-
 def main():
-    print(f"Starting scan for {STATE} legislation impacting Lake James...")
+    if not API_KEY:
+        print("Error: LEGISCAN_API_KEY environment variable is missing.")
+        return
+
+    print(f"Starting scan for {STATE.upper()} legislation impacting Lake James...")
     all_bills = fetch_bill_list(API_KEY, STATE)
-    print(f"Found {len(all_bills)} total bills in the current session.")
+    print(f"Found {len(all_bills)} total bills in current session.")
 
     matches = []
 
-    # Iterate through bills and check details (API friendly, but note free tier limits)
-    # For a broad free tier, checking titles/descriptions from the MasterList first is safest
     for b in all_bills:
-        # Check masterlist fields first to save API calls
         title_desc = (b.get("title", "") + " " + b.get("description", "")).lower()
 
         matched = False
@@ -77,19 +72,19 @@ def main():
                 break
 
         if matched:
-            print(f"Match found: {b['number']} - {b['title'][:50]}...")
+            bill_id = b.get("bill_id")
+            bill_number = b.get("number", "Unknown")
+            print(f"Match found: {bill_number} - {b.get('title', '')[:50]}...")
 
-            # Fetch deeper details for the final CSV (sponsors, status date)
-            details = fetch_bill_details(API_KEY, b["bill_id"])
+            details = fetch_bill_details(API_KEY, bill_id) if bill_id else {}
 
-            # Extract sponsors string
             sponsors = ", ".join(
                 [s.get("name", "") for s in details.get("sponsors", [])]
             )
 
             matches.append(
                 {
-                    "Bill_ID": b.get("number"),
+                    "Bill_ID": bill_number,
                     "Title": b.get("title"),
                     "Current_Status": b.get("status_desc"),
                     "Last_Action_Date": b.get("last_action_date"),
@@ -99,17 +94,25 @@ def main():
                 }
             )
 
-    # Write matches to CSV
-    if matches:
-        with open(OUTPUT_FILE, mode="w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=matches[0].keys())
-            writer.writeheader()
+    # Always write CSV headers so the file exists even when no matches are found
+    fieldnames = [
+        "Bill_ID",
+        "Title",
+        "Current_Status",
+        "Last_Action_Date",
+        "Trigger_Keyword",
+        "Sponsors",
+        "Source_URL",
+    ]
+
+    with open(OUTPUT_FILE, mode="w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        if matches:
             writer.writerows(matches)
-        print(f"Success! {len(matches)} relevant bills saved to {OUTPUT_FILE}")
-    else:
-        print("Scan complete. No matching bills found targeting those keywords.")
+
+    print(f"Scan complete. {len(matches)} relevant bills saved to {OUTPUT_FILE}")
 
 
 if __name__ == "__main__":
     main()
-
